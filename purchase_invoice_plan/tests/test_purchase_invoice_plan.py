@@ -224,3 +224,43 @@ class TestPurchaseInvoicePlan(TransactionCase):
             purchase_plan.with_context(**ctx).purchase_create_invoice_plan()
             self.assertEqual(len(self.test_po_product.invoice_plan_ids), 5)
             self.test_po_product.remove_invoice_plan()
+
+    def test_amount_invoiced_before_plan_via_manual_bill(self):
+        """Full flow: bill part of the order manually (outside any plan)
+        before creating the invoice plan. The wizard snapshots the invoiced
+        quantity, the plan covers only the remaining amount, and the plan tab
+        reconciles: Untaxed Amount = Already Invoiced (before plan) + Plan Total.
+        """
+        po = self.test_po_product  # 10 units x 1000 => untaxed 10000
+        self.assertEqual(po.amount_untaxed, 10000)
+        self.assertEqual(po.ip_amount_invoiced_before_plan, 0)
+        # Bill on received quantities so a partial receipt can be billed
+        self.test_product.purchase_method = "receive"
+        # Confirm without an invoice plan, then bill part of it manually
+        po.use_invoice_plan = False
+        po.button_confirm()
+        self.assertEqual(po.state, "purchase")
+        receive = po.picking_ids.filtered(lambda l: l.state != "done")
+        receive.move_ids_without_package.quantity_done = 4.0
+        receive._action_done()
+        po.action_create_invoice()  # native "Create Bill", outside any plan
+        self.assertEqual(po.order_line.qty_invoiced, 4)
+        # Now plan the remaining amount
+        po.use_invoice_plan = True
+        ctx = {
+            "active_id": po.id,
+            "active_ids": [po.id],
+            "all_remain_invoices": True,
+        }
+        with Form(self.PurchaseInvoicePlan) as p:
+            p.num_installment = 4
+        p.save().with_context(**ctx).purchase_create_invoice_plan()
+        # The wizard snapshots the already-billed quantity
+        self.assertEqual(po.order_line.qty_invoiced_before_plan, 4)
+        self.assertEqual(po.ip_amount_invoiced_before_plan, 4000)
+        # Installments cover only the remaining 6000
+        self.assertEqual(po.ip_total_amount, 6000)
+        self.assertEqual(
+            po.amount_untaxed,
+            po.ip_amount_invoiced_before_plan + po.ip_total_amount,
+        )

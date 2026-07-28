@@ -34,6 +34,13 @@ class PurchaseOrder(models.Model):
         compute="_compute_ip_total",
         string="Total Amount",
     )
+    ip_amount_invoiced_before_plan = fields.Monetary(
+        compute="_compute_ip_amount_invoiced_before_plan",
+        string="Already Invoiced (before plan)",
+        help="Untaxed amount already billed on this order before the invoice "
+        "plan was created. The plan installments only cover the remaining "
+        "amount, so: Untaxed Amount = Already Invoiced + Plan Total.",
+    )
 
     @api.depends("invoice_plan_ids")
     def _compute_ip_total(self):
@@ -41,6 +48,14 @@ class PurchaseOrder(models.Model):
             installments = rec.invoice_plan_ids.filtered("installment")
             rec.ip_total_percent = sum(installments.mapped("percent"))
             rec.ip_total_amount = sum(installments.mapped("amount"))
+
+    @api.depends("order_line.qty_invoiced_before_plan", "order_line.price_unit")
+    def _compute_ip_amount_invoiced_before_plan(self):
+        for rec in self:
+            rec.ip_amount_invoiced_before_plan = sum(
+                line.qty_invoiced_before_plan * line.price_unit
+                for line in rec.order_line
+            )
 
     def _compute_ip_invoice_plan(self):
         for rec in self:
